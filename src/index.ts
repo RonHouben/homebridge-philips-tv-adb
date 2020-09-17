@@ -62,7 +62,7 @@ class ADBPlugin {
   private readonly tvService: HBService;
   private readonly tvInfo: any;
   private readonly clearIntervalHandler!: NodeJS.Timeout;
-  private selectedSourceId!: number;
+  private selectedSourceId: number;
 
   private retryCounter!: number;
 
@@ -84,8 +84,9 @@ class ADBPlugin {
     this.selectedSourceId = this.config.sources.reduce((a, s) => {
       s.default ? a = s.id : null;
       return a;
-    }, 1);
+    }, 0);
 
+    this.log.warn("selectedSourceId", this.selectedSourceId)
     this.tvService = api.hap.Service as unknown as HBService
 
     if (!config) {
