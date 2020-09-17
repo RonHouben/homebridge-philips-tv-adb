@@ -6,30 +6,18 @@ import {
   Logger,
   AccessoryConfig,
   PlatformAccessory,
-  // Service as HBService,
+  Service as HBService,
 } from "homebridge";
 import wakeonlan from "wol";
 
-// TODO: create an exec function that returns true or false.
-let 
-Service, 
-Characteristic;
-// Homebridge, Accessory
+let Service: typeof HBService;
+let Characteristic;
 
 const PLUGIN_NAME = "homebridge-philips-tv-adb";
 const PLATFORM_NAME = "PhilipsTVADB";
-const SLEEP_COMMAND = "dumpsys power | grep mHoldingDisplay | cut -d = -f 2";
-const NO_STATUS =
-  "Can't communicate to device, please check your ADB connection manually";
 const RETRY_LIMIT = 5;
 const DEFAULT_INTERVAL = 5000;
 const DEFAULT_NAME = "Android Television";
-
-module.exports = (homebridge: API) => {
-  Service = homebridge.hap.Service;
-  Characteristic = homebridge.hap.Characteristic;
-  homebridge.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, ADBPluginPlatform);
-};
 
 enum DeviceState {
   OFF,
@@ -52,7 +40,6 @@ interface Source {
 interface Apps {
   id: string;
   name: string;
-  // type: InputType.APP;
 }
 
 class ADBPlugin {
@@ -62,7 +49,6 @@ class ADBPlugin {
   private readonly mac!: string;
   private readonly sources!: Source[];
   private readonly apps!: Apps[];
-  private currentSourceId!: number; private currentSourceOnProgress!: boolean;
   private readonly tv!: PlatformAccessory;
   private readonly tvService: any;
   private readonly tvInfo: any;
@@ -156,6 +142,32 @@ class ADBPlugin {
     this.checkStatus(this.interval)
   }
 
+  private async initialize(ip: string) {
+    // first check if the device appears in the adb devices
+    const deviceList = await this.sendCommand('adb devices')
+    if (deviceList.includes(ip)) { 
+      // try to adb connect to the device
+      const connect = await this.sendCommand(`adb connect ${ip}`)
+      if (connect.includes('connected')) {
+        // get product information
+        const productInfo = await this.sendCommand(`adb -s ${ip} shell "getprop ro.product.model && getprop ro.product.manufacturer && getprop ro.serialno"`)
+        const [modelName, manufacturer, serialNumber ] = productInfo.split("\n");
+
+        // regiser the product information to the service
+        this.tvInfo
+          .setCharacteristic(Characteristic.Model, modelName)
+          .setCharacteristic(Characteristic.Manufacturer, manufacturer)
+          .setCharacteristic(
+            Characteristic.SerialNumber,
+            serialNumber || ip
+          );
+
+        // Publish the accessories
+        this.api.publishExternalAccessories(PLUGIN_NAME, [this.tv]);
+      }
+    }
+  }
+
   private createSources() {
     this.log.debug(this.ip, this.createSources, "executing");
     this.sources.forEach((source) => {
@@ -191,7 +203,7 @@ class ADBPlugin {
   private handleOnOff() {
     this.tvService
       .getCharacteristic(Characteristic.Active)
-      .on("set", async (newState, callback) => {
+      .on("set", async (newState) => {
 
         if (newState === DeviceState.ON) {
           this.log.info(
@@ -205,47 +217,12 @@ class ADBPlugin {
           if (wokenUp) {
             this.log.info(this.ip, this.handleOnOff, "wakeonlan succesfull!");
             // wake the device via adb after WoL
-            exec(
-              `adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`,
-              (err) => {
-                if (err) {
-                  this.log.error(
-                    this.ip,
-                    this.handleOnOff,
-                    exec,
-                    `adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`,
-                    "can't wake the device up",
-                    err
-                  );
-                  this.tvService.updateCharacteristic(
-                    Characteristic.Active,
-                    DeviceState.OFF
-                  );
-                  return;
-                } else {
-                  this.log.info(
-                    this.ip,
-                    this.handleOnOff,
-                    exec,
-                    `adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`,
-                    "device is now awake"
-                  );
-                  this.tvService.updateCharacteristic(
-                    Characteristic.Active,
-                    DeviceState.ON
-                  );
-                  callback(null);
-                }
-              }
-            );
-          }
-          if (!wokenUp) {
-            this.log.error(this.ip, this.handleOnOff, "wakeonlan failed!");
+            await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`)
+
             this.tvService.updateCharacteristic(
               Characteristic.Active,
-              DeviceState.OFF
+              DeviceState.ON
             );
-            return;
           }
         }
 
@@ -256,40 +233,17 @@ class ADBPlugin {
             "power off button is pressed"
           );
           // Put the tv in sleep mode
-          exec(
-            `adb -s ${this.ip} shell "input keyevent KEYCODE_SLEEP"`,
-            (err) => {
-              if (err) {
-                this.log.error(
-                  this.ip,
-                  this.handleOnOff,
-                  exec,
-                  `adb -s ${this.ip} shell "input keyevent KEYCODE_SLEEP"`,
-                  "can't put device to sleep",
-                  err
-                );
-                this.tvService.updateCharacteristic(
-                  Characteristic.Active,
-                  DeviceState.ON
-                );
-                return;
-              } else {
-                // set the tvService state to inactive (0)
-                this.log.info(this.ip, "Sleeping");
-                this.tvService.updateCharacteristic(
-                  Characteristic.Active,
-                  DeviceState.OFF
-                );
-                callback(null);
-              }
-            }
+          await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_SLEEP"`)
+
+          this.tvService.updateCharacteristic(
+            Characteristic.Active,
+            DeviceState.OFF
           );
         }
       });
   }
 
   private handleSourceChange() {
-    // handle [input source]
     this.tvService
       .getCharacteristic(Characteristic.ActiveIdentifier)
       .on("set", async (state, callback) => {
@@ -310,6 +264,44 @@ class ADBPlugin {
           }"`)
         }
       });
+  }
+
+  private checkStatus(interval: number) {
+    // Update TV status every second -> or based on configuration
+    setInterval(async () => {
+      this.log.debug(
+        this.ip,
+        this.checkStatus,
+        `checking TV status every ${interval / 1000} seconds`
+      );
+
+      // const deviceOn = await this.checkPower();
+      const deviceOn = await this.getPowerState(this.ip);
+
+      this.log.warn("PING", deviceOn, typeof deviceOn)
+      if (deviceOn) {
+        // update tvService characteristics
+        this.tvService.updateCharacteristic(
+          Characteristic.Active,
+          DeviceState.ON
+           );
+        } else {
+        // update tvService characteristics
+        this.tvService.updateCharacteristic(
+          Characteristic.Active,
+          DeviceState.OFF
+        );
+      }
+
+      if (this.retryCounter >= RETRY_LIMIT) {
+        this.log.info(
+          this.ip,
+          this.checkStatus,
+          `Tried to connect to the accesssory for ${this.retryCounter} times. Updating will stop.`
+        );
+        clearInterval(this.clearIntervalHandler);
+      }
+    }, interval);
   }
   
   private async wakeOnLan(mac: string): Promise<boolean> {
@@ -340,48 +332,6 @@ class ADBPlugin {
     }
   }
 
-  private async checkPower(): Promise<boolean> {
-    this.log.debug(this.ip, this.checkPower, "executing");
-    
-    const deviceOn = await this.getPowerState(this.ip);
-    
-    if (!deviceOn) {
-      const wokenUp = this.wakeOnLan(this.mac);
-
-      if (wokenUp) {
-        return await this.getPowerState(this.ip);
-      }
-    }
-
-    return deviceOn
-  }
-
-  private async initialize(ip: string) {
-    // first check if the device appears in the adb devices
-    const deviceList = await this.sendCommand('adb devices')
-    if (deviceList.includes(ip)) { 
-      // try to adb connect to the device
-      const connect = await this.sendCommand(`adb connect ${ip}`)
-      if (connect.includes('connected')) {
-        // get product information
-        const productInfo = await this.sendCommand(`adb -s ${this.ip} shell "getprop ro.product.model && getprop ro.product.manufacturer && getprop ro.serialno"`)
-        const [modelName, manufacturer, serialNumber ] = productInfo.split("\n");
-
-        // regiser the product information to the service
-        this.tvInfo
-          .setCharacteristic(Characteristic.Model, modelName)
-          .setCharacteristic(Characteristic.Manufacturer, manufacturer)
-          .setCharacteristic(
-            Characteristic.SerialNumber,
-            serialNumber || this.ip
-          );
-
-        // Publish the accessories
-        this.api.publishExternalAccessories(PLUGIN_NAME, [this.tv]);
-      }
-    }
-  }
-
   private async sendCommand(cmd: string): Promise<string> {
     try {
       this.log.debug(this.ip, this.sendCommand, cmd)
@@ -391,48 +341,6 @@ class ADBPlugin {
       this.log.error(this.ip, this.sendCommand, err)
       throw new Error(err)
     }
-  }
-
-  private checkStatus(interval: number) {
-    // Update TV status every second -> or based on configuration
-    setInterval(async () => {
-      this.log.debug(
-        this.ip,
-        this.checkStatus,
-        `checking TV status every ${interval / 1000} seconds`
-      );
-
-      // const deviceOn = await this.checkPower();
-      const deviceOn = await this.getPowerState(this.ip);
-
-      this.log.warn("PING", deviceOn, typeof deviceOn)
-      if (deviceOn) {
-        // update tvService characteristics
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.ON
-           );
-          
-          // check the sources input
-          // this.checkSources();
-        } else {
-        // update tvService characteristics
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.OFF
-        );
-        // this.checkSources();
-      }
-
-      if (this.retryCounter >= RETRY_LIMIT) {
-        this.log.info(
-          this.ip,
-          this.checkStatus,
-          `Tried to connect to the accesssory for ${this.retryCounter} times. Updating will stop.`
-        );
-        clearInterval(this.clearIntervalHandler);
-      }
-    }, interval);
   }
 }
 
@@ -478,3 +386,9 @@ class ADBPluginPlatform {
     }
   }
 }
+
+module.exports = (homebridge: API) => {
+  Service = homebridge.hap.Service;
+  Characteristic = homebridge.hap.Characteristic;
+  homebridge.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, ADBPluginPlatform);
+};
