@@ -84,9 +84,8 @@ class ADBPlugin {
     this.selectedSourceId = this.config.sources.reduce((a, s) => {
       s.default ? a = s.id : null;
       return a;
-    }, 0);
+    }, 1);
 
-    this.log.warn("selectedSourceId", this.selectedSourceId)
     this.tvService = api.hap.Service as unknown as HBService
 
     if (!config) {
@@ -188,29 +187,31 @@ class ADBPlugin {
     this.log.debug(this.ip, this.createSources, "executing");
     this.sources.forEach((source) => {
       this.log.info(this.ip, this.createSources, "creating source:\n", source);
+
       const service = this.tv.addService(
         Service.InputSource,
         source.name,
         source.id
       )
-      .setCharacteristic(Characteristic.Identifier, source.id)
-      .setCharacteristic(Characteristic.ConfiguredName, source.name)
-      .setCharacteristic(
+      service.setCharacteristic(Characteristic.Identifier, source.id)
+      service.setCharacteristic(Characteristic.ConfiguredName, source.name)
+      service.setCharacteristic(
           Characteristic.InputSourceType,
           Characteristic.InputSourceType.HDMI
         )
-      .setCharacteristic(
+      service.setCharacteristic(
           Characteristic.TargetVisibilityState,
           Characteristic.TargetVisibilityState.SHOWN
         )
-      .setCharacteristic(
+      service.setCharacteristic(
           Characteristic.CurrentVisibilityState,
           Characteristic.CurrentVisibilityState.SHOWN
         )
-      .setCharacteristic(
+      service.setCharacteristic(
           Characteristic.IsConfigured,
           Characteristic.IsConfigured.CONFIGURED
         );
+
       this.tvService.addLinkedService(service);
     });
   }
@@ -277,7 +278,7 @@ class ADBPlugin {
         } else {
           // set this as the selectedSource in the object's state
           this.selectedSourceId = source.id;
-          this.tvService
+          this.tvService.updateCharacteristic(Characteristic.ActiveIdentifier, this.selectedSourceId)
           // get the device out of sleep
           await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`)
           // execute the command to change the input on the device
