@@ -283,22 +283,26 @@ class ADBPlugin {
         `checking TV status every ${interval / 1000} seconds`
       );
 
-      // const deviceOn = await this.checkPower();
-      const deviceOn = await this.getPowerState(this.ip);
-
-      this.log.warn("PING", deviceOn, typeof deviceOn)
-      if (deviceOn) {
-        // update tvService characteristics
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.ON
-           );
-        } else {
-        // update tvService characteristics
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.OFF
-        );
+      // first try to connect via adb to the TV
+      const connect = await this.sendCommand(`adb connect ${this.ip}`)
+      
+      if (connect.includes('connected')) {
+        // check the powerstate of the TV
+        const deviceOn = await this.getPowerState(this.ip);
+  
+        if (deviceOn) {
+          // update tvService characteristics
+          this.tvService.updateCharacteristic(
+            Characteristic.Active,
+            DeviceState.ON
+             );
+          } else {
+          // update tvService characteristics
+          this.tvService.updateCharacteristic(
+            Characteristic.Active,
+            DeviceState.OFF
+          );
+        }
       }
 
       if (this.retryCounter >= RETRY_LIMIT) {
