@@ -7,11 +7,12 @@ import {
   AccessoryConfig,
   PlatformAccessory,
   Service as HBService,
+  Characteristic as HBCharacteristic
 } from "homebridge";
 import wakeonlan from "wol";
 
 let Service: typeof HBService;
-let Characteristic;
+let Characteristic: typeof HBCharacteristic;
 
 const PLUGIN_NAME = "homebridge-philips-tv-adb";
 const PLATFORM_NAME = "PhilipsTVADB";
@@ -35,7 +36,7 @@ interface Source {
   readonly id: number;
   readonly name: string;
   readonly inputSourceKey: InputSourceKeys;
-  readonly service: any;
+  readonly default?: boolean;
 }
 interface Apps {
   id: string;
@@ -58,9 +59,10 @@ class ADBPlugin {
   private readonly sources!: Source[];
   private readonly apps!: Apps[];
   private readonly tv!: PlatformAccessory;
-  private readonly tvService: any;
+  private readonly tvService: HBService;
   private readonly tvInfo: any;
   private readonly clearIntervalHandler!: NodeJS.Timeout;
+  private selectedSourceId!: number;
 
   private retryCounter!: number;
 
@@ -79,7 +81,12 @@ class ADBPlugin {
     this.sources = this.config.sources || [];
     this.apps = this.config.apps || [];
     this.retryCounter = 1;
-    this.tvService = api.hap.Service
+    this.selectedSourceId = this.config.sources.reduce((a, s) => {
+      s.default ? a = s.id : null;
+      return a;
+    }, 0);
+
+    this.tvService = api.hap.Service as unknown as HBService
 
     if (!config) {
       this.log.error(
@@ -184,23 +191,22 @@ class ADBPlugin {
         Service.InputSource,
         source.name,
         source.id
-      );
-      service
-        .setCharacteristic(Characteristic.Identifier, source.id)
-        .setCharacteristic(Characteristic.ConfiguredName, source.name)
-        .setCharacteristic(
+      )
+      .setCharacteristic(Characteristic.Identifier, source.id)
+      .setCharacteristic(Characteristic.ConfiguredName, source.name)
+      .setCharacteristic(
           Characteristic.InputSourceType,
-          Characteristic.InputSourceType.TV
+          Characteristic.InputSourceType.HDMI
         )
-        .setCharacteristic(
+      .setCharacteristic(
           Characteristic.TargetVisibilityState,
           Characteristic.TargetVisibilityState.SHOWN
         )
-        .setCharacteristic(
+      .setCharacteristic(
           Characteristic.CurrentVisibilityState,
           Characteristic.CurrentVisibilityState.SHOWN
         )
-        .setCharacteristic(
+      .setCharacteristic(
           Characteristic.IsConfigured,
           Characteristic.IsConfigured.CONFIGURED
         );
@@ -227,6 +233,10 @@ class ADBPlugin {
             // wake the device via adb after WoL
             await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`)
 
+            // update the ActiveIdentifier with the this.selectedSourceId so the tv will connect to the
+            // correct hdmi source
+            this.tvService.updateCharacteristic(Characteristic.ActiveIdentifier, this.selectedSourceId)
+            // update the device state to on.
             this.tvService.updateCharacteristic(
               Characteristic.Active,
               DeviceState.ON
@@ -264,7 +274,10 @@ class ADBPlugin {
             `couldn't find a source with id "${state}"`
           );
         } else {
-          // first get the device out of sleep
+          // set this as the selectedSource in the object's state
+          this.selectedSourceId = source.id;
+          this.tvService
+          // get the device out of sleep
           await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`)
           // execute the command to change the input on the device
           await this.sendCommand(`adb -s ${this.ip} shell "input keyevent ${
@@ -291,6 +304,8 @@ class ADBPlugin {
         const deviceOn = await this.getPowerState(this.ip);
   
         if (deviceOn) {
+          this.tvService.updateCharacteristic(Characteristic.ActiveIdentifier, this.selectedSourceId)
+
           // update tvService characteristics
           this.tvService.updateCharacteristic(
             Characteristic.Active,
