@@ -84,7 +84,7 @@ class ADBPlugin {
     this.selectedSourceId = this.config.sources.reduce((a, s) => {
       s.default ? a = s.id : null;
       return a;
-    }, 0);
+    }, 1);
 
     this.tvService = api.hap.Service as unknown as HBService
 
