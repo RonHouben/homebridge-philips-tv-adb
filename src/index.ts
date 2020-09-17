@@ -1,18 +1,19 @@
+import util from 'util';
 import { exec } from "child_process";
+const execAsync = util.promisify(exec);
 import {
   API,
   Logger,
   AccessoryConfig,
   PlatformAccessory,
-  // Service,
+  // Service as HBService,
 } from "homebridge";
 import wakeonlan from "wol";
 
-// TODO: check if dependencies are installed (adb & wakeonlane)
-// TODO: create a function (checkSources) that gets the current state of the TV via ADB and sets the currentSourceId based on that
-// TODO: move exec to something async await because I don't like this callback hell...
-
-let Service, Characteristic;
+// TODO: create an exec function that returns true or false.
+let 
+Service, 
+Characteristic;
 // Homebridge, Accessory
 
 const PLUGIN_NAME = "homebridge-philips-tv-adb";
@@ -34,7 +35,6 @@ enum DeviceState {
   OFF,
   ON,
 }
-
 enum InputSourceKeys {
   KEYCODE_F1 = 1,
   KEYCODE_F2,
@@ -49,7 +49,6 @@ interface Source {
   readonly inputSourceKey: InputSourceKeys;
   readonly service: any;
 }
-
 interface Apps {
   id: string;
   name: string;
@@ -66,7 +65,7 @@ class ADBPlugin {
   private currentSourceId!: number;
   private currentSourceOnProgress!: boolean;
   private readonly tv!: PlatformAccessory;
-  private readonly tvService: typeof Service;
+  private readonly tvService: any;
   private readonly tvInfo: any;
   private readonly clearIntervalHandler!: NodeJS.Timeout;
 
@@ -79,13 +78,6 @@ class ADBPlugin {
   ) {
     this.log.debug("Loaded the following config:\n", config);
 
-    if (!config) {
-      this.log.error(
-        `Please provide a config for this accessory: ${this.config.name}`
-      );
-      return;
-    }
-
     // Configuration
     this.name = this.config.name || DEFAULT_NAME;
     this.interval = this.config.interval || DEFAULT_INTERVAL;
@@ -94,6 +86,15 @@ class ADBPlugin {
     this.sources = this.config.sources || [];
     this.apps = this.config.apps || [];
     this.retryCounter = 1;
+    this.tvService = api.hap.Service
+
+    if (!config) {
+      this.log.error(
+        `Please provide a config for this accessory: ${this.config.name}`
+      );
+      return;
+    }
+
     if (!this.ip) {
       this.log.info(`Please provide IP for this accessory: ${this.name}`);
       return;
@@ -155,6 +156,7 @@ class ADBPlugin {
      */
 
     this.connect((connected) => {
+      this.log.warn("CONNECTING")
       if (connected) {
         // get the accessory information and send it to HB
         exec(
@@ -168,7 +170,7 @@ class ADBPlugin {
               );
               return;
             } else {
-              this.log.debug("PING FROM this.connect callback:", stdout);
+              // this.log.debug("PING FROM this.connect callback:", stdout);
               const productInfo: string[] = stdout.split("\n");
               const modelName = productInfo[0];
               const manufacturer = productInfo[1];
@@ -197,7 +199,7 @@ class ADBPlugin {
     });
   }
 
-  createSources() {
+  private createSources() {
     this.log.debug(this.ip, this.createSources, "executing");
     this.sources.forEach((source) => {
       this.log.info(this.ip, this.createSources, "creating source:\n", source);
@@ -229,7 +231,7 @@ class ADBPlugin {
     });
   }
 
-  handleOnOff() {
+  private handleOnOff() {
     // handle [on / off]
     this.tvService
       .getCharacteristic(Characteristic.Active)
@@ -337,7 +339,7 @@ class ADBPlugin {
       });
   }
 
-  handleSourceChange() {
+  private handleSourceChange() {
     // handle [input source]
     this.tvService
       .getCharacteristic(Characteristic.ActiveIdentifier)
@@ -356,6 +358,10 @@ class ADBPlugin {
           "this.currentSourceOnProgress",
           this.currentSourceOnProgress
         );
+        
+        // first check if the device is asleep
+        this.log.warn(this.tvService.getCharacteristic(Characteristic.Active).value)
+
         if (!this.currentSourceOnProgress) {
           const source = this.sources.find((source) => source.id === state);
           this.currentSourceId = state;
@@ -409,68 +415,51 @@ class ADBPlugin {
         callback(null);
       });
   }
+  
+  private async wakeOnLan(mac: string): Promise<boolean> {
+    try {
+      return await wakeonlan.wake(this.mac);
+    } catch (error) {
+      this.log.error(this.ip, this.wakeOnLan, error)
+      throw new Error(error)
+    }
+  }
+  
+  private async getPowerState(ip: string): Promise<boolean> {
+    const POWER_STATE_CMD = "dumpsys power | grep mHoldingDisplay | cut -d = -f 2"
 
-  checkPower(): boolean {
-    this.log.debug(this.ip, this.checkPower, "executing");
-    let result = false;
-    exec(`adb -s ${this.ip} shell "${SLEEP_COMMAND}"`, (err, stdout) => {
-      this.log.debug(
-        this.ip,
-        this.checkPower,
-        exec,
-        `"abs-s ${this.ip} shell "${SLEEP_COMMAND}"":\n`,
-        stdout
-      );
-      if (err) {
-        this.log.info(
-          this.ip,
-          this.checkPower,
-          exec,
-          `"abs-s ${this.ip} shell "${SLEEP_COMMAND}"":\n`,
-          "Couldn't receive a power state from the accessory",
-          NO_STATUS
-        );
-        result = false;
-        return;
-      }
-      const deviceOn = /true/i.test(stdout);
-
-      if (deviceOn) {
-        this.log.debug(this.ip, this.checkPower, "device is on!");
-        this.log.debug(
-          this.ip,
-          this.checkPower,
-          "device state is:",
-          Characteristic.Active.ACTIVE,
-          DeviceState[Characteristic.Active.ACTIVE]
-        );
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.ON
-        );
-        result = true;
-        return;
+    try {
+      const {stdout: deviceOn, stderr} = await execAsync(`adb -s ${ip} shell "${POWER_STATE_CMD}"`)
+      if (stderr) {
+        this.log.error(ip, this.getPowerState, "couldn't get power state", stderr)
+        throw new Error(stderr)
       } else {
-        this.log.debug(this.ip, this.checkPower, "device is off");
-        this.log.debug(
-          this.ip,
-          this.checkPower,
-          "device state is:",
-          Characteristic.Active.INACTIVE,
-          DeviceState[Characteristic.Active.INACTIVE]
-        );
-        this.tvService.updateCharacteristic(
-          Characteristic.Active,
-          DeviceState.OFF
-        );
-        result = false;
-        return;
+        this.log.info(ip, this.getPowerState, "device power state is:", deviceOn);
+        return deviceOn.trim() === "true";
       }
-    });
-    return result;
+    } catch (error) {
+      this.log.error(ip, this.getPowerState, error)
+      throw new Error(error)
+    }
   }
 
-  checkSources() {
+  private async checkPower(): Promise<boolean> {
+    this.log.debug(this.ip, this.checkPower, "executing");
+    
+    const deviceOn = await this.getPowerState(this.ip);
+    
+    if (!deviceOn) {
+      const wokenUp = this.wakeOnLan(this.mac);
+
+      if (wokenUp) {
+        return await this.getPowerState(this.ip);
+      }
+    }
+
+    return deviceOn
+  }
+
+  private checkSources() {
     this.log.debug(this.ip, this.checkSources, "executing");
     this.log.debug(
       this.ip,
@@ -478,8 +467,13 @@ class ADBPlugin {
       "currentSourceId",
       this.currentSourceId
     );
+    // get the current source
     this.currentSourceOnProgress = true;
-    const source = this.sources[this.currentSourceId];
+    // const source = this.sources[this.currentSourceId];
+    const source = this.sources[0];
+  
+
+    this.log.warn(this.ip, this.checkSources, "source", source)
 
     exec(
       `adb -s ${this.ip} shell "dumpsys window windows | grep -E mFocusedApp"`,
@@ -558,7 +552,7 @@ class ADBPlugin {
    * using adb.
    * @param callback Function
    */
-  connect(callback) {
+  private connect(callback) {
     this.log.debug(this.ip, this.connect, "executing");
     this.log.info(
       this.ip,
@@ -632,15 +626,34 @@ class ADBPlugin {
     });
   }
 
-  update(interval: number) {
+  private update(interval: number) {
     // Update TV status every second -> or based on configuration
-    setInterval(() => {
+    setInterval(async () => {
       this.log.debug(
         this.ip,
         this.update,
         `checking TV status every ${interval / 1000} seconds`
       );
-      if (this.checkPower()) {
+
+      // const deviceOn = await this.checkPower();
+      const deviceOn = await this.getPowerState(this.ip);
+
+      this.log.warn("PING", deviceOn, typeof deviceOn)
+      if (deviceOn) {
+        // update tvService characteristics
+        this.tvService.updateCharacteristic(
+          Characteristic.Active,
+          DeviceState.ON
+           );
+          
+          // check the sources input
+          // this.checkSources();
+        } else {
+        // update tvService characteristics
+        this.tvService.updateCharacteristic(
+          Characteristic.Active,
+          DeviceState.OFF
+        );
         // this.checkSources();
       }
 
@@ -679,7 +692,9 @@ class ADBPluginPlatform {
     if (this.config.accessories && Array.isArray(this.config.accessories)) {
       for (const accessory of this.config.accessories) {
         if (accessory) {
+          // const tvPlugin = new ADBPlugin(this.log, accessory, this.api);
           new ADBPlugin(this.log, accessory, this.api);
+          // tvPlugin.
         }
       }
     } else if (this.config.accessories) {
