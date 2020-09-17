@@ -42,6 +42,14 @@ interface Apps {
   name: string;
 }
 
+interface Config extends AccessoryConfig {
+  interval: number;
+  ip: string;
+  mac: string;
+  sources: Source[];
+  apps: Apps[];
+}
+
 class ADBPlugin {
   private readonly name!: string;
   private readonly interval!: number;
@@ -58,7 +66,7 @@ class ADBPlugin {
 
   constructor(
     private readonly log: Logger,
-    private readonly config: AccessoryConfig,
+    private readonly config: Config,
     private readonly api: API
   ) {
     this.log.debug("Loaded the following config:\n", config);
@@ -246,7 +254,7 @@ class ADBPlugin {
   private handleSourceChange() {
     this.tvService
       .getCharacteristic(Characteristic.ActiveIdentifier)
-      .on("set", async (state, callback) => {
+      .on("set", async (state) => {
         const source = this.sources.find((source) => source.id === state);
         // throw an error if the source can't be found
         if (!source) {
