@@ -62,8 +62,7 @@ class ADBPlugin {
   private readonly mac!: string;
   private readonly sources!: Source[];
   private readonly apps!: Apps[];
-  private currentSourceId!: number;
-  private currentSourceOnProgress!: boolean;
+  private currentSourceId!: number; private currentSourceOnProgress!: boolean;
   private readonly tv!: PlatformAccessory;
   private readonly tvService: any;
   private readonly tvInfo: any;
@@ -143,60 +142,18 @@ class ADBPlugin {
         Characteristic.SleepDiscoveryMode,
         Characteristic.SleepDiscoveryMode.ALWAYS_DISCOVERABLE
       );
-    // Create additional services
+      
+    // initialize the TV connection
+    this.initialize(this.ip);
+    // Create sources based of the config
     this.createSources();
-
-    // Handle input
+    
+    // Handle input changes
     this.handleOnOff();
     this.handleSourceChange();
-
-    /**
-     * Publish as external accessory
-     * Check ADB connection before publishing the accesory
-     */
-
-    this.connect((connected) => {
-      this.log.warn("CONNECTING")
-      if (connected) {
-        // get the accessory information and send it to HB
-        exec(
-          `adb -s ${this.ip} shell "getprop ro.product.model && getprop ro.product.manufacturer && getprop ro.serialno"`,
-          (err, stdout) => {
-            if (err) {
-              this.log.error(this.ip, "- Can't get accessory information", err);
-              this.log.error(
-                this.ip,
-                "- Please check you ADB connection to this accessory, manually"
-              );
-              return;
-            } else {
-              // this.log.debug("PING FROM this.connect callback:", stdout);
-              const productInfo: string[] = stdout.split("\n");
-              const modelName = productInfo[0];
-              const manufacturer = productInfo[1];
-              const serialNumber = productInfo[2];
-
-              this.tvInfo
-                .setCharacteristic(Characteristic.Model, modelName)
-                .setCharacteristic(Characteristic.Manufacturer, manufacturer)
-                .setCharacteristic(
-                  Characteristic.SerialNumber,
-                  serialNumber || this.ip
-                );
-
-              // Publish the accessories
-              this.api.publishExternalAccessories(PLUGIN_NAME, [this.tv]);
-              return;
-            }
-          }
-        );
-      } else {
-        this.log.info(
-          this.ip,
-          "- Please check you ADB connection to this accessory, manually"
-        );
-      }
-    });
+    
+    // Check the status every n-seconds
+    this.checkStatus(this.interval)
   }
 
   private createSources() {
@@ -232,26 +189,18 @@ class ADBPlugin {
   }
 
   private handleOnOff() {
-    // handle [on / off]
     this.tvService
       .getCharacteristic(Characteristic.Active)
-      .on("set", async (state, callback) => {
-        this.log.debug(
-          this.ip,
-          this.handleOnOff,
-          "executing",
-          state,
-          DeviceState[state]
-        );
+      .on("set", async (newState, callback) => {
 
-        if (state === DeviceState.ON) {
+        if (newState === DeviceState.ON) {
           this.log.info(
             this.ip,
             this.handleOnOff,
             "power on button is pressed"
           );
           // wake on lan first
-          const wokenUp = await wakeonlan.wake(this.mac);
+          const wokenUp = await this.wakeOnLan(this.mac);
 
           if (wokenUp) {
             this.log.info(this.ip, this.handleOnOff, "wakeonlan succesfull!");
@@ -300,7 +249,7 @@ class ADBPlugin {
           }
         }
 
-        if (state === DeviceState.OFF) {
+        if (newState === DeviceState.OFF) {
           this.log.info(
             this.ip,
             this.handleOnOff,
@@ -343,81 +292,29 @@ class ADBPlugin {
     // handle [input source]
     this.tvService
       .getCharacteristic(Characteristic.ActiveIdentifier)
-      .on("set", (state, callback) => {
-        this.log.warn(this.ip, this.handleSourceChange, "executing");
-        this.log.warn(this.ip, this.handleSourceChange, "state", state);
-        this.log.warn(
-          this.ip,
-          this.handleSourceChange,
-          "currentSourceId",
-          this.currentSourceId
-        );
-        this.log.warn(
-          this.ip,
-          this.handleSourceChange,
-          "this.currentSourceOnProgress",
-          this.currentSourceOnProgress
-        );
-        
-        // first check if the device is asleep
-        this.log.warn(this.tvService.getCharacteristic(Characteristic.Active).value)
-
-        if (!this.currentSourceOnProgress) {
-          const source = this.sources.find((source) => source.id === state);
-          this.currentSourceId = state;
-          this.currentSourceOnProgress = true;
-
-          if (!source) {
-            this.log.error(
-              this.ip,
-              this.handleSourceChange,
-              `couldn't find a source with id "${this.currentSourceId}"`
-            );
-            throw new Error(
-              `couldn't find a source with id "${this.currentSourceId}"`
-            );
-          }
-
-          exec(
-            `adb -s ${this.ip} shell "input keyevent ${
-              InputSourceKeys[source.inputSourceKey]
-            }"`,
-            (err, stdout) => {
-              if (err) {
-                this.log.warn(
-                  this.ip,
-                  this.handleSourceChange,
-                  exec,
-                  `adb -s ${this.ip} shell "input keyevent ${
-                    InputSourceKeys[source.inputSourceKey]
-                  }`,
-                  err
-                );
-              }
-
-              if (stdout) {
-                this.log.info(
-                  this.ip,
-                  this.handleSourceChange,
-                  exec,
-                  `adb -s ${this.ip} shell "input keyevent ${
-                    InputSourceKeys[source.inputSourceKey]
-                  }`,
-                  `switched to ${source.name}`,
-                  stdout
-                );
-              }
-            }
+      .on("set", async (state, callback) => {
+        const source = this.sources.find((source) => source.id === state);
+        // throw an error if the source can't be found
+        if (!source) {
+          this.log.error(
+            this.ip,
+            this.handleSourceChange,
+            `couldn't find a source with id "${state}"`
           );
+        } else {
+          // first get the device out of sleep
+          await this.sendCommand(`adb -s ${this.ip} shell "input keyevent KEYCODE_WAKEUP"`)
+          // execute the command to change the input on the device
+          await this.sendCommand(`adb -s ${this.ip} shell "input keyevent ${
+            InputSourceKeys[source.inputSourceKey]
+          }"`)
         }
-        this.currentSourceOnProgress = false;
-
-        callback(null);
       });
   }
   
   private async wakeOnLan(mac: string): Promise<boolean> {
     try {
+      this.log.debug(this.ip, this.wakeOnLan, mac)
       return await wakeonlan.wake(this.mac);
     } catch (error) {
       this.log.error(this.ip, this.wakeOnLan, error)
@@ -459,179 +356,49 @@ class ADBPlugin {
     return deviceOn
   }
 
-  private checkSources() {
-    this.log.debug(this.ip, this.checkSources, "executing");
-    this.log.debug(
-      this.ip,
-      this.checkSources,
-      "currentSourceId",
-      this.currentSourceId
-    );
-    // get the current source
-    this.currentSourceOnProgress = true;
-    // const source = this.sources[this.currentSourceId];
-    const source = this.sources[0];
-  
+  private async initialize(ip: string) {
+    // first check if the device appears in the adb devices
+    const deviceList = await this.sendCommand('adb devices')
+    if (deviceList.includes(ip)) { 
+      // try to adb connect to the device
+      const connect = await this.sendCommand(`adb connect ${ip}`)
+      if (connect.includes('connected')) {
+        // get product information
+        const productInfo = await this.sendCommand(`adb -s ${this.ip} shell "getprop ro.product.model && getprop ro.product.manufacturer && getprop ro.serialno"`)
+        const [modelName, manufacturer, serialNumber ] = productInfo.split("\n");
 
-    this.log.warn(this.ip, this.checkSources, "source", source)
-
-    exec(
-      `adb -s ${this.ip} shell "dumpsys window windows | grep -E mFocusedApp"`,
-      (err, stdout) => {
-        this.log.debug(
-          this.ip,
-          this.checkSources,
-          exec,
-          `adb -s ${this.ip} shell "dumpsys window windows | grep -E mFocusedApp":\n`,
-          stdout
-        );
-
-        if (err) {
-          this.log.error(
-            this.ip,
-            this.checkSources,
-            exec,
-            `adb -s ${this.ip} shell "dumpsys window windows | grep -E mFocusedApp":\n`,
-            "No inputs states from the accessory\n",
-            "Can't communicate to device, please check your ADB connection manually"
+        // regiser the product information to the service
+        this.tvInfo
+          .setCharacteristic(Characteristic.Model, modelName)
+          .setCharacteristic(Characteristic.Manufacturer, manufacturer)
+          .setCharacteristic(
+            Characteristic.SerialNumber,
+            serialNumber || this.ip
           );
-          return;
-        }
 
-        // Identified current focused app
-        let output: any = stdout.split("/");
-        // const output = [
-        //   "mFocusedApp=AppWindowToken{e3cc25 token=Token{f7a281c ActivityRecord{eb72d8f u0 org.droidtv.playtv",
-        //   ".PlayTvActivity t30}}}",
-        // ];
-        // this.log.warn(stdout);
-        output[0] = output[0].split(" ");
-        // this.log.warn(stdout[0]);
-        output[0] = output[0][4];
-        // this.log.warn(stdout[0]);
-        // this.log.warn(stdout[1]);
-
-        if (
-          output[1].includes("Launcher") ||
-          output[1].includes("MainActivity") ||
-          output[1].includes("RecentsTvActivity")
-        ) {
-          output = this.sources[0].id;
-        } else {
-          output = output[0];
-        }
-
-        if (err) {
-          this.log.info(
-            this.ip,
-            "No inputs states from the accessory",
-            NO_STATUS
-          );
-        } else if (source.id !== output) {
-          this.sources.forEach((source, i) => {
-            // Home or registered app
-            if (output === source.id) {
-              this.currentSourceId = i;
-            }
-          });
-
-          // push new state
-          this.tvService.setCharacteristic(
-            Characteristic.ActiveIdentifier,
-            this.currentSourceId
-          );
-        }
-
-        this.currentSourceOnProgress = false;
+        // Publish the accessories
+        this.api.publishExternalAccessories(PLUGIN_NAME, [this.tv]);
       }
-    );
+    }
   }
 
-  /**
-   * This function connects to the Philips TV
-   * using adb.
-   * @param callback Function
-   */
-  private connect(callback) {
-    this.log.debug(this.ip, this.connect, "executing");
-    this.log.info(
-      this.ip,
-      this.connect,
-      "Connection attempt",
-      this.retryCounter
-    );
-    // first try to disconnect any open connections
-    exec(`adb disconnect ${this.ip}`, (err) => {
-      if (err) {
-        this.log.debug(
-          this.ip,
-          this.connect,
-          exec,
-          `adb disconnect ${this.ip}`,
-          err
-        );
-      }
-      // try to connect
-      exec(`adb connect ${this.ip}`, (_err, stdout) => {
-        this.log.debug(
-          this.ip,
-          this.connect,
-          exec,
-          `adb connect ${this.ip}`,
-          stdout
-        );
-
-        // need to stdout manually for "failed" text
-        // because the adb command doesn't raise an error
-        const error = stdout.includes("failed");
-        const connected = stdout.includes("connected");
-
-        if (error) {
-          this.log.error(
-            this.ip,
-            this.connect,
-            exec,
-            `adb connect ${this.ip}`,
-            stdout
-          );
-          this.retryCounter++;
-          return;
-        }
-        if (connected) {
-          this.log.info(
-            this.ip,
-            this.connect,
-            exec,
-            `adb connect ${this.ip}`,
-            "connected"
-          );
-          // go into the update cycle
-          this.update(this.interval);
-          callback(connected);
-        } else {
-          // some unexpected error occured
-          // disconnect open sessions
-          exec(`adb disconnect ${this.ip}`);
-          this.log.error(
-            this.ip,
-            this.connect,
-            exec,
-            `adb disconnect ${this.ip}`,
-            stdout
-          );
-          this.retryCounter++;
-          return;
-        }
-      });
-    });
+  private async sendCommand(cmd: string): Promise<string> {
+    try {
+      this.log.debug(this.ip, this.sendCommand, cmd)
+      const {stdout} = await execAsync(cmd);
+      return stdout
+    } catch (err) {
+      this.log.error(this.ip, this.sendCommand, err)
+      throw new Error(err)
+    }
   }
 
-  private update(interval: number) {
+  private checkStatus(interval: number) {
     // Update TV status every second -> or based on configuration
     setInterval(async () => {
       this.log.debug(
         this.ip,
-        this.update,
+        this.checkStatus,
         `checking TV status every ${interval / 1000} seconds`
       );
 
@@ -660,7 +427,7 @@ class ADBPlugin {
       if (this.retryCounter >= RETRY_LIMIT) {
         this.log.info(
           this.ip,
-          this.update,
+          this.checkStatus,
           `Tried to connect to the accesssory for ${this.retryCounter} times. Updating will stop.`
         );
         clearInterval(this.clearIntervalHandler);
