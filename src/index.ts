@@ -353,14 +353,18 @@ class ADBPlugin {
     } catch (error) {
       this.log.warn("WHAAAAAA!!")
       this.log.error(ip, this.getPowerState, error)
-      this.log.warn("trying to reset the connection")
-      
       await this.sendCommand(`adb kill-server`)
-      const connected = await this.sendCommand(`adb connect ${ip}`)
-
-      this.log.warn("connected?", connected)
-      
-      throw new Error(error)
+      this.log.warn("trying to reset the connection")
+     
+      try {
+        const connected = await this.sendCommand(`adb connect ${ip}`)
+        this.log.warn("connected?", connected)
+      } catch (err) {
+        this.log.warn(err)
+        return false;
+      }
+      return false; 
+      // throw new Error(error)
     }
   }
 
