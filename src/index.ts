@@ -366,10 +366,10 @@ class ADBPlugin {
       this.log.error(this.ip, this.sendCommand, err)
 
       // try reconnecting
-      await this.resetConnection(this.ip)
+      // await this.resetConnection(this.ip)
       // retry the sendCommand
-      return await this.sendCommand(cmd)
-      // throw new Error(err)
+      // return await this.sendCommand(cmd)
+      throw new Error(err)
     }
   }
   
