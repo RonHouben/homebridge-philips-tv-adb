@@ -52,19 +52,17 @@ interface Config extends AccessoryConfig {
 }
 
 class ADBPlugin {
-  private readonly name!: string;
-  private readonly interval!: number;
-  private readonly ip!: string;
-  private readonly mac!: string;
-  private readonly sources!: Source[];
-  private readonly apps!: Apps[];
+  private readonly name: string;
+  private readonly interval: number;
+  private readonly ip: string;
+  private readonly mac: string;
+  private readonly sources: Source[];
+  private readonly apps: Apps[];
   private readonly tv!: PlatformAccessory;
   private readonly tvService: HBService;
   private readonly tvInfo: any;
-  private readonly clearIntervalHandler!: NodeJS.Timeout;
   private selectedSourceId: number;
-
-  private retryCounter!: number;
+  private retryCounter: number;
 
   constructor(
     private readonly log: Logger,
@@ -81,7 +79,7 @@ class ADBPlugin {
     this.sources = this.config.sources || [];
     this.apps = this.config.apps || [];
     this.retryCounter = 1;
-    this.selectedSourceId = this.config.sources.reduce((a, s) => {
+    this.selectedSourceId = this.config.sources.reduce((a, s, i) => {
       s.default ? a = s.id : null;
       return a;
     }, 1);
@@ -291,7 +289,7 @@ class ADBPlugin {
 
   private checkStatus(interval: number) {
     // Update TV status every second -> or based on configuration
-    setInterval(async () => {
+    const timer = setInterval(async () => {
       this.log.debug(
         this.ip,
         this.checkStatus,
@@ -328,7 +326,7 @@ class ADBPlugin {
           this.checkStatus,
           `Tried to connect to the accesssory for ${this.retryCounter} times. Updating will stop.`
         );
-        clearInterval(this.clearIntervalHandler);
+        clearInterval(timer);
       }
     }, interval);
   }
@@ -347,16 +345,21 @@ class ADBPlugin {
     const POWER_STATE_CMD = "dumpsys power | grep mHoldingDisplay | cut -d = -f 2"
 
     try {
-      const {stdout: deviceOn, stderr} = await execAsync(`adb -s ${ip} shell "${POWER_STATE_CMD}"`)
-      if (stderr) {
-        this.log.error(ip, this.getPowerState, "couldn't get power state", stderr)
-        throw new Error(stderr)
-      } else {
-        this.log.info(ip, this.getPowerState, "device power state is:", deviceOn);
-        return deviceOn.trim() === "true";
-      }
+      const powerState = await this.sendCommand(`adb -s ${ip} shell "${POWER_STATE_CMD}"`)
+      
+      this.log.debug(ip, this.getPowerState, "device power state is:", powerState);
+      
+      return powerState.trim() === "true";
     } catch (error) {
+      this.log.warn("WHAAAAAA!!")
       this.log.error(ip, this.getPowerState, error)
+      this.log.warn("trying to reset the connection")
+      
+      await this.sendCommand(`adb kill-server`)
+      const connected = await this.sendCommand(`adb connect ${ip}`)
+
+      this.log.warn("connected?", connected)
+      
       throw new Error(error)
     }
   }
@@ -396,9 +399,7 @@ class ADBPluginPlatform {
     if (this.config.accessories && Array.isArray(this.config.accessories)) {
       for (const accessory of this.config.accessories) {
         if (accessory) {
-          // const tvPlugin = new ADBPlugin(this.log, accessory, this.api);
           new ADBPlugin(this.log, accessory, this.api);
-          // tvPlugin.
         }
       }
     } else if (this.config.accessories) {
