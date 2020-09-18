@@ -376,17 +376,10 @@ class ADBPlugin {
   private async resetConnection(ip: string): Promise<void> {
     this.log.warn(this.ip, this.sendCommand, "trying to reset the connection")
 
-    const disconnected = await this.sendCommand(`adb disconnect ${ip}`)
-    if (disconnected.includes('disconnected')) {
-      const connected = await this.sendCommand(`adb connect ${ip}`)
-
-      if (connected.includes('connected')) {
-
-      }
-    }
-
+    await this.sendCommand('adb kill-server')
+    await this.sendCommand('adb devices')
+    await this.sendCommand(`adb connect ${ip}`)
   }
-
 }
 
 class ADBPluginPlatform {
