@@ -360,6 +360,7 @@ class ADBPlugin {
     try {
       this.log.debug(this.ip, this.sendCommand, cmd)
       const {stdout} = await execAsync(cmd);
+      this.log.debug(this.ip, this.sendCommand, "result:\n", stdout)
       return stdout
     } catch (err) {
       this.log.error(this.ip, this.sendCommand, err)
