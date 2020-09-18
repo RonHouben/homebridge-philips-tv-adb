@@ -351,20 +351,8 @@ class ADBPlugin {
       
       return powerState.trim() === "true";
     } catch (error) {
-      this.log.warn("WHAAAAAA!!")
-      this.log.error(ip, this.getPowerState, error)
-      await this.sendCommand(`adb kill-server`)
-      this.log.warn("trying to reset the connection")
-     
-      try {
-        const connected = await this.sendCommand(`adb connect ${ip}`)
-        this.log.warn("connected?", connected)
-      } catch (err) {
-        this.log.warn(err)
-        return false;
-      }
-      return false; 
-      // throw new Error(error)
+      this.log.error(ip, this.getPowerState, error)     
+      throw new Error(error)
     }
   }
 
@@ -375,9 +363,29 @@ class ADBPlugin {
       return stdout
     } catch (err) {
       this.log.error(this.ip, this.sendCommand, err)
+
+      // try reconnecting
+      this.resetConnection(this.ip)
+      // retry the sendCommand
+      this.sendCommand(cmd)
       throw new Error(err)
     }
   }
+  
+  private async resetConnection(ip: string): Promise<void> {
+    this.log.warn(this.ip, this.sendCommand, "trying to reset the connection")
+
+    const disconnected = await this.sendCommand(`adb disconnect ${ip}`)
+    if (disconnected.includes('disconnected')) {
+      const connected = await this.sendCommand(`adb connect ${ip}`)
+
+      if (connected.includes('connected')) {
+
+      }
+    }
+
+  }
+
 }
 
 class ADBPluginPlatform {
